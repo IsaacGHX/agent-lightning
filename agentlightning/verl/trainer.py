@@ -59,7 +59,30 @@ class AgentLightningTrainer(RayPPOTrainer):
     def _validate(self):
         assert len(self.val_dataloader) == 1, "Please set val_batch_size to None for better throughput."
 
-        test_data = next(iter(self.val_dataloader))
+        # no empty check dataloader
+        try:
+            test_data = next(iter(self.val_dataloader))
+        except StopIteration:
+            raise ValueError("Validation dataloader is empty. Check your validation dataset.")
+
+        # no empty check key
+        print(f"Validation data keys: {test_data.keys()}")
+        for key, value in test_data.items():
+            if isinstance(value, list):
+                print(f"Validation data {key} length: {len(value)}")
+                if len(value) == 0:
+                    print(f"Warning: Empty data in {key}")
+            elif isinstance(value, torch.Tensor):
+                print(f"Validation data {key} shape: {value.shape}")
+                if value.numel() == 0:
+                    print(f"Warning: Empty tensor in {key}")
+            else:
+                print(f"Validation data {key} type: {type(value)}")
+
+        # no empty check
+        if not test_data or all((isinstance(v, list) and len(v) == 0) or (isinstance(v, torch.Tensor) and v.numel() == 0) for v in test_data.values()):
+            raise ValueError("Validation data is empty. Check your validation dataset.")
+
         test_batch = DataProto.from_single_dict(test_data)
 
         self.async_rollout_manager.wake_up()
@@ -68,7 +91,17 @@ class AgentLightningTrainer(RayPPOTrainer):
             self.async_rollout_manager.server_addresses,
             is_train=False,
         )
+
+        # whether persisting queueing 
+        if self.agent_mode_daemon._total_tasks_queued == 0:
+            raise ValueError("No validation tasks were queued. Check data preparation.")
+
         self.agent_mode_daemon.run_until_all_finished()
+
+        # 检查是否有完成的任务
+        if len(self.agent_mode_daemon._completed_rollouts) == 0:
+            raise ValueError("No validation tasks completed. Check server and agent execution.")
+
         test_metrics = self.agent_mode_daemon.get_test_metrics()
         self.agent_mode_daemon.clear_data_and_server()
         self.async_rollout_manager.sleep()
@@ -80,8 +113,25 @@ class AgentLightningTrainer(RayPPOTrainer):
         metrics = {}
         timing_raw = {}
 
-        with _timer("step", timing_raw):
+        # data key check & no empty check
+        print(f"Training data keys: {batch_dict.keys()}")
+        for key, value in batch_dict.items():
+            if isinstance(value, list):
+                print(f"Training data {key} length: {len(value)}")
+                if len(value) == 0:
+                    print(f"Warning: Empty data in {key}")
+            elif isinstance(value, torch.Tensor):
+                print(f"Training data {key} shape: {value.shape}")
+                if value.numel() == 0:
+                    print(f"Warning: Empty tensor in {key}")
+            else:
+                print(f"Training data {key} type: {type(value)}")
 
+        # ensure no empty
+        if not batch_dict or all((isinstance(v, list) and len(v) == 0) or (isinstance(v, torch.Tensor) and v.numel() == 0) for v in batch_dict.values()):
+            raise ValueError("Training data is empty. Check your training dataset.")
+
+        with _timer("step", timing_raw):
             # When agent mode is enabled, we read the batch as it is.
             gen_batch = batch
 
@@ -91,7 +141,17 @@ class AgentLightningTrainer(RayPPOTrainer):
                 self.agent_mode_daemon.set_up_data_and_server(
                     gen_batch.non_tensor_batch, self.async_rollout_manager.server_addresses
                 )
+
+                # 检查是否有任务被排队
+                if self.agent_mode_daemon._total_tasks_queued == 0:
+                    raise ValueError("No training tasks were queued. Check data preparation.")
+
                 self.agent_mode_daemon.run_until_all_finished()
+
+                # 检查是否有完成的任务
+                if len(self.agent_mode_daemon._completed_rollouts) == 0:
+                    raise ValueError("No training tasks completed. Check server and agent execution.")
+
                 batch, agent_metrics = self.agent_mode_daemon.get_train_data_batch(
                     max_prompt_length=self.config.data.max_prompt_length,
                     max_response_length=self.config.data.max_response_length,
@@ -100,6 +160,7 @@ class AgentLightningTrainer(RayPPOTrainer):
                 metrics.update(agent_metrics)
                 self.agent_mode_daemon.clear_data_and_server()
                 self.async_rollout_manager.sleep()
+
 
             if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                 with _timer("gen_max", timing_raw):

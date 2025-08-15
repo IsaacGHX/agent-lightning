@@ -396,6 +396,10 @@ class AgentModeDaemon:
                 "data_id": original_sample["data_id"],
             }
             finished_id_to_sample_info[rollout_id] = info
+
+        # data no empty check
+        if not finished_id_to_sample_info:
+            raise ValueError("No valid rollout data found. Cannot create training batch.")
         #
         # --- Data processing and tensor creation logic ---
         # Get all the reported data.
@@ -504,6 +508,11 @@ class AgentModeDaemon:
         # For a true reset, the server's internal queues would also need clearing.
         # This implementation assumes that `set_up_data_and_server` is called
         # for each new run, effectively starting a fresh batch.
+        # extra status clearup
+        self.is_train = True
+        # server rollout clearup
+        if hasattr(self.server, 'clear_queues'):
+            self.server.clear_queues()
 
     def _fillna_reward(self, rollout):
         if rollout.final_reward is None:

@@ -3,7 +3,6 @@ from contextlib import contextmanager
 from copy import deepcopy
 from typing import Dict, Tuple
 
-import numpy as np
 import torch
 from omegaconf import OmegaConf
 from pprint import pprint
@@ -30,6 +29,12 @@ from verl.utils.tracking import Tracking
 
 from .daemon import AgentModeDaemon
 
+import os
+import json
+import uuid
+from collections import defaultdict
+
+import time
 
 @contextmanager
 def _timer(name: str, timing_raw: Dict[str, float]):
@@ -98,11 +103,65 @@ class AgentLightningTrainer(RayPPOTrainer):
 
         self.agent_mode_daemon.run_until_all_finished()
 
-        # 检查是否有完成的任务
         if len(self.agent_mode_daemon._completed_rollouts) == 0:
             raise ValueError("No validation tasks completed. Check server and agent execution.")
 
         test_metrics = self.agent_mode_daemon.get_test_metrics()
+        # rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
+        # if rollout_data_dir:
+        #     print("[DEBUG] DEBUG FOR THE TEST TIME batch.batch keys: ", list(batch.batch.keys()))
+        #     print("[DEBUG] DEBUG FOR THE TEST TIME batch.batch values: ", list(batch.batch.values()))
+        #     print("[DEBUG] DEBUG FOR THE TEST TIME batch.non_tensor_batch keys: ", list(batch.non_tensor_batch.keys()))
+        #     print("[DEBUG] DEBUG FOR THE TEST TIME batch.non_tensor_batch values: ", list(batch.non_tensor_batch.values()))
+
+        #     # 从AgentModeDaemon中提取原始问题和响应
+        #     inputs = []
+        #     outputs = []
+        #     ground_truths = []  
+        #     scores = []
+        #     reward_extra_infos_dict = {}
+        #     data_ids = []
+
+        #     for rollout_id, rollout in self.agent_mode_daemon._completed_rollouts.items():
+        #         original_sample = self.agent_mode_daemon._task_id_to_original_sample.get(rollout_id, {})
+        #         data_id = original_sample.get("data_id", str(uuid.uuid4()))
+        #         data_ids.append(data_id)
+
+        #         input_text = original_sample.get('prompt', '') or original_sample.get('question', '')
+        #         inputs.append(input_text)
+
+        #         # 提取ground truth
+        #         ground_truth = original_sample.get('ground_truth', '') or original_sample.get('answer', '')
+        #         ground_truths.append(ground_truth)
+
+        #         output_text = ""
+        #         if rollout.triplets and len(rollout.triplets) > 0:
+        #             last_triplet = rollout.triplets[-1]
+        #             if last_triplet.response and 'token_ids' in last_triplet.response:
+        #                 output_text = self.tokenizer.decode(last_triplet.response['token_ids'], skip_special_tokens=True)
+        #         outputs.append(output_text)
+
+        #         final_reward = self.agent_mode_daemon._fillna_reward(rollout)
+        #         scores.append(final_reward)
+
+        #         for key in ['reward_values', 'confidence', 'other_metrics']:
+        #             if key not in reward_extra_infos_dict:
+        #                 reward_extra_infos_dict[key] = []
+        #             reward_extra_infos_dict[key].append(rollout.__dict__.get(key, None))
+
+        #     self._dump_rollout_data(
+        #         inputs=inputs,
+        #         outputs=outputs,
+        #         ground_truths=ground_truths,  # 传递ground truth
+        #         scores=scores,
+        #         reward_extra_infos_dict=reward_extra_infos_dict,
+        #         metrics=test_metrics,
+        #         dump_path=rollout_data_dir,
+        #         is_train=False,
+        #         batch=test_batch,
+        #         data_ids=data_ids
+        #     )
+
         self.agent_mode_daemon.clear_data_and_server()
         self.async_rollout_manager.sleep()
         return test_metrics
@@ -142,13 +201,11 @@ class AgentLightningTrainer(RayPPOTrainer):
                     gen_batch.non_tensor_batch, self.async_rollout_manager.server_addresses
                 )
 
-                # 检查是否有任务被排队
                 if self.agent_mode_daemon._total_tasks_queued == 0:
                     raise ValueError("No training tasks were queued. Check data preparation.")
 
                 self.agent_mode_daemon.run_until_all_finished()
 
-                # 检查是否有完成的任务
                 if len(self.agent_mode_daemon._completed_rollouts) == 0:
                     raise ValueError("No training tasks completed. Check server and agent execution.")
 
@@ -297,20 +354,26 @@ class AgentLightningTrainer(RayPPOTrainer):
                 metrics.update(actor_output_metrics)
 
             # Log rollout generations if enabled
-            rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
-            if rollout_data_dir:
-                with _timer("dump_rollout_generations", timing_raw):
-                    print(batch.batch.keys())
-                    inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
-                    outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
-                    scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
-                    self._dump_generations(
-                        inputs=inputs,
-                        outputs=outputs,
-                        scores=scores,
-                        reward_extra_infos_dict=reward_extra_infos_dict,
-                        dump_path=rollout_data_dir,
-                    )
+            # rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
+            # if rollout_data_dir:
+            #     with _timer("dump_rollout_generations", timing_raw):
+            #         print("[DEBUG] DEBUG FOR THE TRAIN TIME batch.batch keys: ", list(batch.batch.keys()))
+            #         print("[DEBUG] DEBUG FOR THE TRAIN TIME batch.batch values: ", list(batch.batch.values()))
+            #         print("[DEBUG] DEBUG FOR THE TRAIN TIME batch.non_tensor_batch keys: ", list(batch.non_tensor_batch.keys()))
+            #         print("[DEBUG] DEBUG FOR THE TRAIN TIME batch.non_tensor_batch values: ", list(batch.non_tensor_batch.values()))
+            #         inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
+            #         outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
+            #         scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+            #         self._dump_rollout_data(
+            #             inputs=inputs,
+            #             outputs=outputs,
+            #             scores=scores,
+            #             reward_extra_infos_dict=reward_extra_infos_dict,
+            #             metrics=metrics,
+            #             dump_path=rollout_data_dir,
+            #             is_train=True,
+            #             batch=batch
+            #         )
 
         # compute training metrics
         metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
@@ -320,6 +383,58 @@ class AgentLightningTrainer(RayPPOTrainer):
         metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
 
         return metrics
+
+    def _dump_rollout_data(self, inputs, outputs, scores, reward_extra_infos_dict, metrics, dump_path, is_train, batch, data_ids=None, ground_truths=None):
+        data_type = 'train' if is_train else 'val'
+        current_time = time.strftime("%Y%m%d_%H%M%S")
+        step_dir = os.path.join(dump_path, data_type, f"step_{self.global_steps}_{current_time}")
+        os.makedirs(step_dir, exist_ok=True)
+
+        if data_ids is None:
+            data_ids = batch.non_tensor_batch.get("data_id_list", [str(uuid.uuid4()) for _ in inputs])
+        else:
+            data_ids = data_ids[:len(inputs)] + [str(uuid.uuid4()) for _ in range(len(inputs) - len(data_ids))]
+
+        question_groups = defaultdict(list)
+        all_metrics = metrics.copy()
+
+        for i, (input_text, output_text, score) in enumerate(zip(inputs, outputs, scores)):
+            data_id = data_ids[i] if i < len(data_ids) else str(uuid.uuid4())
+
+            record = {
+                "query_index": i,
+                "data_id": data_id,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "input": input_text,
+                "output": output_text,
+                "score": score,
+                "metrics": {},
+                "extra_info": {}
+            }
+
+            if ground_truths and i < len(ground_truths):
+                record["ground_truth"] = ground_truths[i]
+
+            for metric_name, metric_value in all_metrics.items():
+                if isinstance(metric_value, (list, tuple)) and i < len(metric_value):
+                    record["metrics"][metric_name] = metric_value[i]
+                else:
+                    record["metrics"][f"global_{metric_name}"] = metric_value
+
+            if reward_extra_infos_dict:
+                for key, values in reward_extra_infos_dict.items():
+                    if i < len(values):
+                        record["extra_info"][key] = values[i]
+
+            question_groups[data_id].append(record)
+
+        for data_id, records in question_groups.items():
+            json_path = os.path.join(step_dir, f"query_{data_id}.json")
+
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+
+        print(f"Successfully saved rollout data to {step_dir}")
 
     def fit(self):
         logger = Tracking(
@@ -353,7 +468,7 @@ class AgentLightningTrainer(RayPPOTrainer):
         if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
             val_metrics = self._validate()
             assert val_metrics, f"{val_metrics=}"
-            pprint(f"Initial validation metrics: {val_metrics}")
+            print(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):
                 return

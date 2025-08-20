@@ -1,6 +1,6 @@
 import os
 from agentlightning import Trainer, DevTaskLoader, LLM
-from calc_agent import CalcAgent
+from calc_octo import CalcAgent
 
 
 def dev_task_loader() -> DevTaskLoader:
@@ -9,19 +9,22 @@ def dev_task_loader() -> DevTaskLoader:
             {
                 "question": "What is 2 + 2?",
                 "result": "4",
+                "extra_info":{'ground_truth': '4', 'idx': 0}
             },
             {
                 "question": "What is 3 * 5?",
                 "result": "15",
+                "extra_info":{'ground_truth': '15', 'idx': 1}
             },
             {
                 "question": "What is the square root of 16?",
                 "result": "4",
+                "extra_info":{'ground_truth': '4', 'idx': 2}
             },
         ],
         resources={
             "main_llm": LLM(
-                endpoint="https://api.openai.com/v1", model="gpt-4.1-nano", sampling_parameters={"temperature": 0.7}
+                endpoint="https://api.openai.com/v1", model="gpt-4o-mini", sampling_parameters={"temperature": 0.7}
             ),
         },
     )

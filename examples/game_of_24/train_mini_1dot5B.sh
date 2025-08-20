@@ -2,20 +2,23 @@
 
 set -e
 
-export N_GPUS=4
+export CUDA_VISIBLE_DEVICES=6,7
+export N_GPUS=2
 export BASE_MODEL=Qwen/Qwen2.5-1.5B-Instruct
 # export BASE_MODEL=Qwen/Qwen2.5-0.5B
-export DATA_DIR=data
+export DATA_DIR=data/gameof24
 export ROLLOUT_TP_SIZE=1
-export EXPERIMENT_NAME=calc_octo_1dot5B
-export PROJECT_NAME=AgentLightning_octo
+# export EXPERIMENT_NAME=calc_octo_1dot5B
+export EXPERIMENT_NAME=calc_game24_1dot5B
+# export PROJECT_NAME=AgentLightning_octo
+export PROJECT_NAME=AgentLightning_game24
 export BATCH_SIZE=8
-export ROLLOUT_NUM=4
+export ROLLOUT_NUM=2
 
 echo "Starting training script..."
 
 PYTHONUNBUFFERED=1 python -m agentlightning.verl \
-    agentlightning.port=9998 \
+    agentlightning.port=9999 \
     algorithm.adv_estimator=grpo \
     data.train_files=${DATA_DIR}/train.parquet \
     data.val_files=${DATA_DIR}/test.parquet \

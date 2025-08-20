@@ -23,79 +23,51 @@ calculator_mcp_server = StdioServerParams(command="uvx", args=["mcp-server-calcu
 
 # Copied and adapted from https://github.com/prompteus/calc-x/blob/master/gadgets/metrics.py
 
-
-def normalize_option(option: str) -> str:
-    """
-    >>> normalize_option("  (A)  \n")
-    'A'
-    """
-    return re.sub(r"(\s+|\(|\))", "", option)
-
-
-def is_option_result(result: str) -> bool:
-    """
-    >>> is_option_result("  A)  \n")
-    True
-    >>> is_option_result("  23/7 ")
-    False
-    """
-    return normalize_option(result) in list(string.ascii_letters)
-
-
-def float_eval(input_str: str) -> float:
-    if " = around " in input_str:
-        input_str = input_str.split(" = around ")[0]
-    expr = sympy.parse_expr(input_str, evaluate=True)
-    return float(expr.evalf())
-
-
-def scalar_are_results_same(pred_result: str, true_result: str, rel_tol: float) -> bool:
-    pred_result = str(pred_result) if pred_result is not None else ""
-    true_result = str(true_result) if true_result is not None else ""
-
-    if pred_result.strip() == true_result.strip():
-        return True
-
-    if is_option_result(true_result):
-        # The task is to select correct option
-        true_result = normalize_option(true_result)
-        pred_result = normalize_option(pred_result)
-        return pred_result == true_result
-
-    # The task is to calculate the result as a number
-    try:
-        pred_float = float_eval(pred_result)
-        true_float = float_eval(true_result)
-        return math.isclose(pred_float, true_float, rel_tol=rel_tol)
-    except Exception:
-        pass
-
-    return False
+import re
+import ast
+import builtins
 
 
 @reward
-async def eval(prediction: str, ground_truth: str, val: bool = False) -> float:
-    """
-    Calculates the reward using a subtractive penalty for repetition,
-    which applies regardless of the answer's correctness.
-    """
+async def eval(groundtruth, answer_extracted, val: bool = False) -> float:
+    def extract_numbers(gt_list):
+        for expr in gt_list:
+            expr = expr.replace('\u00d7', '*').replace('×', '*').replace('−', '-').replace(' ', '')
+            nums = re.findall(r'\d+', expr)
+            if len(nums) == 4:
+                return sorted(int(x) for x in nums)
+        return None
 
-    base_reward = float(scalar_are_results_same(prediction, ground_truth, 1e-2))
+    target_nums = extract_numbers(groundtruth)
+    if target_nums is None:
+        return 0.0
 
-    # if not val:
-    #     words = re.findall(r'\w+', str(prediction).lower())
-        
-    #     repetition_cost = 0.0
-    #     if len(words) > 0:
-    #         unique_words_ratio = len(set(words)) / len(words)
-    #         repetition_cost = 1.0 - unique_words_ratio
-    #     penalty_magnitude = 0.25
-    #     final_reward = base_reward - (penalty_magnitude * repetition_cost)
-    # else:
-    #     final_reward = base_reward
-    final_reward = base_reward
-    
-    return final_reward
+    expr = str(answer_extracted).strip()
+    if not expr:
+        return 0.0
+
+    expr_clean = expr.replace('\u00d7', '*').replace('×', '*').replace('−', '-').replace(' ', '')
+
+    used_strs = re.findall(r'\d+', expr_clean)
+    if len(used_strs) != 4:
+        return 0.0
+    try:
+        used_nums = sorted(int(x) for x in used_strs)
+    except:
+        return 0.0
+
+    if used_nums != target_nums:
+        return 0.0  # num not match
+
+    if not re.fullmatch(r'[\d\+\-\*\/\(\)]+', expr_clean):
+        return 0.0
+
+    try:
+        ast.parse(expr_clean, mode='eval')  
+        result = builtins.eval(expr_clean) 
+        return 1.0 if abs(result - 24.0) < 1e-5 else 0.0
+    except:
+        return 0.0
 
 
 class OctotoolsCalcAgent:
@@ -180,7 +152,7 @@ class CalcAgent(LitAgent):
         self.val_lock_file = None
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.base_rollout_dir = f"./rollout_data/calc_octo_{timestamp}" 
+        self.base_rollout_dir = f"./rollout_data/octo_game24_{timestamp}" 
         self.tools = ["Generalist_Solution_Generator_Tool","Python_Code_Generator_Tool","Google_Search_Tool","Wikipedia_Knowledge_Searcher_Tool"]
         self._solve_call_count = 0
         
@@ -189,7 +161,7 @@ class CalcAgent(LitAgent):
 
         # Added locks and state variables for async-safe step management.
         self.train_batch_size = 8 # As defined in the original code logic
-        self.rollout_num = 4 # As defined in the original code logic
+        self.rollout_num = 200 # As defined in the original code logic
 
     async def _solve_and_evaluate(self, calc_agent: OctotoolsCalcAgent, task: Any, step_n: int, val: bool = False):
         """A helper function to run the agent, parse the result, and evaluate it."""
@@ -387,4 +359,4 @@ class CalcAgent(LitAgent):
 
 
 if __name__ == "__main__":
-    Trainer(n_workers=10).fit(CalcAgent(), "http://localhost:9998/")
+    Trainer(n_workers=10).fit(CalcAgent(), "http://localhost:9999/")

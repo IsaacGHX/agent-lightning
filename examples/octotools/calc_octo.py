@@ -6,6 +6,9 @@ from typing import Any, Optional
 
 import sympy
 
+import yaml
+import argparse
+
 from autogen_ext.tools.mcp import StdioServerParams
 from agentlightning import Trainer, LitAgent, NamedResources, LLM, reward, configure_logger, DevTaskLoader
 
@@ -168,28 +171,35 @@ class CalcAgent(LitAgent):
 
     def __init__(self):
         super().__init__()
-        # Agents will be initialized on the first call to their respective rollouts.
+        # Agents will be initialized on the first call
         self.training_agent = None
         self.validation_agent = None
         self.val_step_n = None
+        
+        path_config = config.get("paths", {})
+        agent_specific_config = config.get("agent_config", {})
+        data_config = config.get("data", {})
 
+        self.base_rollout_dir = path_config.get("base_output_dir", "./rollout_data") # e.g., "./out"
+        self.run_folder_format = path_config.get("run_folder_format", "{model_name}_{timestamp}")
+
+        self.tools = agent_specific_config.get("tools", ["Generalist_Solution_Generator_Tool"])
+        self.train_batch_size = data_config.get("train_batch_size", 8)
+        self.rollout_num = agent_specific_config.get("rollout_num", 4)
+        
+        print(f"Agent configured with: base_output_dir='{self.base_rollout_dir}', train_batch_size={self.train_batch_size}, rollout_num={self.rollout_num}")
+
+        # 以下属性将在 _initialize_run_once 中被动态设置
         self.rollout_dir = None
         self.train_rollout_dir = None
         self.val_rollout_dir = None
         self.train_lock_file = None
         self.val_lock_file = None
 
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.base_rollout_dir = f"./rollout_data/calc_octo_{timestamp}" 
-        self.tools = ["Generalist_Solution_Generator_Tool","Python_Code_Generator_Tool","Google_Search_Tool","Wikipedia_Knowledge_Searcher_Tool"]
-        self._solve_call_count = 0
+        # 基于从配置中读取的基础目录来定义同步文件路径
+        self.run_info_file = os.path.join(self.base_rollout_dir, ".run_info")
+        self.init_lock_file = os.path.join(self.base_rollout_dir, ".init.lock")
         
-        self.run_info_file = os.path.join(self.base_rollout_dir, ".run_info") # 存储本次运行最终目录路径的文件
-        self.init_lock_file = os.path.join(self.base_rollout_dir, ".init.lock") # 用于确保初始化只执行一次的全局锁
-
-        # Added locks and state variables for async-safe step management.
-        self.train_batch_size = 8 # As defined in the original code logic
-        self.rollout_num = 4 # As defined in the original code logic
 
     async def _solve_and_evaluate(self, calc_agent: OctotoolsCalcAgent, task: Any, step_n: int, val: bool = False):
         """A helper function to run the agent, parse the result, and evaluate it."""
@@ -198,7 +208,7 @@ class CalcAgent(LitAgent):
         # self.rollout_num = calc_agent.resources.get("actor_rollout_ref").rollout.n
 
         try:
-            output_format = "When ready, output the answer enclosed in <answer> and </answer> tags. For multiple-choice questions, provide only the uppercase letter of the correct option (e.g., A, B, C, ...). Do not generate any content after the </answer> tag."
+            output_format = "Output the answer when you are ready. The answer should be surrounded by <answer>...</answer>. DO NOT generate after the </answer> tag."
             prompt = task["question"] + " " + output_format
             result = calc_agent.solve(question=prompt)
             
@@ -266,57 +276,46 @@ class CalcAgent(LitAgent):
         print(f"Rollout data saved to: {save_path}")
 
 
-    # --- NEW METHOD START ---
-    # 3. 创建一个新的、进程安全的单次初始化方法
     async def _initialize_run_once(self, resources: NamedResources):
         """
         Ensures that the rollout directory is set up only once per run,
         in a process-safe way.
         """
-        # 如果当前进程已经初始化过了，直接返回
         if self.rollout_dir is not None:
             return
 
-        # 确保基础目录存在，以便存放锁和信息文件
         os.makedirs(self.base_rollout_dir, exist_ok=True)
         
         init_lock = FileLock(self.init_lock_file, timeout=60)
         with init_lock:
-            # 检查是否已有其他进程完成了初始化并留下了信息文件
             if os.path.exists(self.run_info_file):
-                # 如果是，直接读取最终的目录路径
                 with open(self.run_info_file, 'r') as f:
                     final_rollout_dir = f.read().strip()
             else:
-                # 如果不是，说明这是所有进程中第一个执行此代码的
-                # 由它来创建目录名，并写入共享文件
-                model_name = resources.get("main_llm").model
-                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") # 格式化的时间戳
-                model_name = model_name.rsplit('/', 1)[-1]
-                # 构建符合您要求的目录名：base_name_model_timestamp
-                final_rollout_dir = os.path.join(
-                    self.base_rollout_dir, f"{model_name}_{timestamp}"
+                model_name_full = resources.get("main_llm").model
+                model_name_simple = model_name_full.split('/')[-1]
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+                run_folder_name = self.run_folder_format.format(
+                    model_name=model_name_simple,
+                    timestamp=timestamp
                 )
                 
-                # 将最终确定的路径写入共享文件，供其他进程使用
+                final_rollout_dir = os.path.join(self.base_rollout_dir, run_folder_name)
+                
                 with open(self.run_info_file, 'w') as f:
                     f.write(final_rollout_dir)
                 print(f"Run directory created by process {os.getpid()}: {final_rollout_dir}")
 
-        # 至此，所有进程都获得了相同的 `final_rollout_dir`
-        # 设置当前进程实例的路径属性
         self.rollout_dir = final_rollout_dir
         self.train_rollout_dir = os.path.join(self.rollout_dir, "train")
         self.val_rollout_dir = os.path.join(self.rollout_dir, "validation")
         
-        # 创建实际的子目录
         os.makedirs(self.train_rollout_dir, exist_ok=True)
         os.makedirs(self.val_rollout_dir, exist_ok=True)
         
-        # 定义各自的锁文件路径
         self.train_lock_file = os.path.join(self.train_rollout_dir, ".train.lock")
         self.val_lock_file = os.path.join(self.val_rollout_dir, ".val.lock")
-    # --- NEW METHOD END ---
         
     async def training_rollout_async(self, task: Any, rollout_id: str, resources: NamedResources, val: bool = False) -> Any:
         await self._initialize_run_once(resources)
@@ -387,4 +386,21 @@ class CalcAgent(LitAgent):
 
 
 if __name__ == "__main__":
-    Trainer(n_workers=10).fit(CalcAgent(), "http://localhost:9998/")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config_path", type=str, default="config.yaml",
+                        help="Path to the configuration YAML file.")
+    args, unknown = parser.parse_known_args()
+
+    print(f"Loading configuration from: {args.config_path}")
+    with open(args.config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    agent = CalcAgent(config=config)
+
+    port = config.get("verl_params", {}).get("port", 9998)
+    
+    # 2. 动态构建 Trainer 的连接地址
+    trainer_endpoint = f"http://localhost:{port}"
+    print(f"Connecting Trainer to endpoint: {trainer_endpoint}")
+
+    Trainer(n_workers=10).fit(agent, trainer_endpoint)

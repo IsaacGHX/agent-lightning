@@ -4,7 +4,7 @@
 set -e
 
 # Switch to project root directory
-cd /home/ubuntu/ipf/agent-lightning
+cd /home/ubuntu/jianwen-us-midwest-1/panlu/ipf-projects/agent-lightning
 source .venv/bin/activate
 
 # Install UV (if not already installed)

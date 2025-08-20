@@ -2,7 +2,7 @@
 
 # --- 配置部分 ---
 # 1. 定义日志目录
-LOG_DIR="./task_logs/cal_x"
+LOG_DIR="./task_logs/game_of_24"
 
 # 2. 定义输出文件的前缀
 LOG_PREFIX="training_output_"
@@ -14,7 +14,7 @@ LOG_SIZE='1M'
 MAX_LOG_FILES=5000
 
 # 5. 您要运行的 Python 命令 (用引号括起来)
-PYTHON_COMMAND="python examples/calc_x/calc_octo.py"
+PYTHON_COMMAND="python examples/game_of_24/game24_octo.py"
 # 或者更复杂的命令，例如：
 # PYTHON_COMMAND="python -m agentlightning.verl algorithm.adv_estimator=grpo data.train_batch_size=8"
 
